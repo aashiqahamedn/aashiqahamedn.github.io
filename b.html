@@ -1,33 +1,26 @@
-import asyncio
 import os
-import re
+import subprocess
 from urllib.parse import urlparse
-
 from PIL import Image, ImageDraw, ImageFont
-from playwright.async_api import async_playwright
-
 
 URL_FILE = "urls.txt"
 OUTPUT_DIR = "screenshots"
-CHROMIUM_PATH = "/usr/bin/chromium"
 
+def sanitize(name):
+    return "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
 
-def sanitize(text):
-    return re.sub(r'[<>:"/\\|?*]', "_", text)
-
-
-def add_banner(image_file, original_url, final_url):
+def add_banner(image_file, text):
     img = Image.open(image_file)
 
-    banner_height = 100
+    banner_height = 80
 
-    canvas = Image.new(
+    out = Image.new(
         "RGB",
         (img.width, img.height + banner_height),
-        "white"
+        (255, 255, 255)
     )
 
-    draw = ImageDraw.Draw(canvas)
+    draw = ImageDraw.Draw(out)
 
     draw.rectangle(
         [(0, 0), (img.width, banner_height)],
@@ -37,194 +30,99 @@ def add_banner(image_file, original_url, final_url):
     try:
         font = ImageFont.truetype(
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            20
+            22
         )
     except:
         font = ImageFont.load_default()
 
     draw.text(
-        (10, 10),
-        f"Original: {original_url}",
+        (10, 20),
+        text,
         fill="white",
         font=font
     )
 
-    draw.text(
-        (10, 50),
-        f"Final: {final_url}",
-        fill="white",
-        font=font
-    )
+    out.paste(img, (0, banner_height))
+    out.save(image_file)
 
-    canvas.paste(img, (0, banner_height))
-    canvas.save(image_file)
-
-
-async def capture(browser, url):
+def take_screenshot(url):
 
     parsed = urlparse(url)
 
-    host = parsed.hostname or "unknown"
-
     port = parsed.port
+
     if not port:
         port = 443 if parsed.scheme == "https" else 80
 
-    port_dir = os.path.join(
+    folder = os.path.join(
         OUTPUT_DIR,
         str(port)
     )
 
     os.makedirs(
-        port_dir,
+        folder,
         exist_ok=True
     )
 
     filename = sanitize(
-        f"{parsed.scheme}_{host}_{port}.png"
+        f"{parsed.scheme}_{parsed.hostname}_{port}.png"
     )
 
     outfile = os.path.join(
-        port_dir,
+        folder,
         filename
     )
 
-    context = await browser.new_context(
-        ignore_https_errors=True,
-        viewport={
-            "width": 1920,
-            "height": 1080
-        },
-        user_agent=(
-            "Mozilla/5.0 (X11; Linux x86_64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/143.0.0.0 Safari/537.36"
-        )
+    print(f"[+] {url}")
+
+    cmd = [
+        "chromium",
+        "--headless=new",
+        "--disable-gpu",
+        "--ignore-certificate-errors",
+        "--hide-scrollbars",
+        "--window-size=1920,3000",
+        f"--screenshot={outfile}",
+        url
+    ]
+
+    subprocess.run(
+        cmd,
+        timeout=60,
+        stderr=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL
     )
 
-    page = await context.new_page()
-
-    final_url = url
-
-    try:
-
-        print("=" * 80)
-        print("[START]", url)
-
-        try:
-
-            response = await page.goto(
-                url,
-                timeout=30000,
-                wait_until="domcontentloaded"
-            )
-
-            await page.wait_for_timeout(8000)
-
-            final_url = page.url
-
-        except Exception as e:
-
-            print("[NAVIGATION ERROR]")
-            print(e)
-
-            try:
-                final_url = page.url
-            except:
-                final_url = url
-
-        try:
-            title = await page.title()
-        except:
-            title = "N/A"
-
-        print("ORIGINAL :", url)
-        print("FINAL    :", final_url)
-        print("TITLE    :", title)
-
-        html_file = outfile.replace(".png", ".html")
-
-        try:
-            html = await page.content()
-
-            with open(
-                html_file,
-                "w",
-                encoding="utf-8"
-            ) as f:
-                f.write(html)
-        except:
-            pass
-
-        await page.screenshot(
-            path=outfile,
-            full_page=True
-        )
-
+    if os.path.exists(outfile):
         add_banner(
             outfile,
-            url,
-            final_url
+            url
         )
+        print(f"    Saved: {outfile}")
+    else:
+        print(f"    Failed")
 
-        print("[SAVED]", outfile)
-
-    except Exception as e:
-
-        print("[FAILED]", url)
-        print(e)
-
-    finally:
-
-        await context.close()
-
-
-async def main():
-
-    if not os.path.exists(URL_FILE):
-        print("urls.txt not found")
-        return
-
-    with open(URL_FILE) as f:
-
-        urls = [
-            line.strip()
-            for line in f
-            if line.strip()
-        ]
-
-    print(f"Loaded {len(urls)} URLs")
+def main():
 
     os.makedirs(
         OUTPUT_DIR,
         exist_ok=True
     )
 
-    async with async_playwright() as p:
+    with open(URL_FILE) as f:
+        urls = [
+            x.strip()
+            for x in f
+            if x.strip()
+        ]
 
-        browser = await p.chromium.launch(
-            executable_path=CHROMIUM_PATH,
-            headless=False,
-            args=[
-                "--ignore-certificate-errors",
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled"
-            ]
-        )
+    for url in urls:
 
-        for url in urls:
-
-            try:
-                await capture(
-                    browser,
-                    url
-                )
-            except Exception as e:
-                print(e)
-
-        await browser.close()
-
+        try:
+            take_screenshot(url)
+        except Exception as e:
+            print(url)
+            print(e)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
