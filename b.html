@@ -1,40 +1,40 @@
+import asyncio
 import os
 import re
-import time
-
 from urllib.parse import urlparse
 
 from PIL import Image
 from PIL import ImageDraw
 from PIL import ImageFont
 
-from selenium import webdriver
-from selenium.webdriver.firefox.options import Options
-from selenium.webdriver.firefox.service import Service
+from playwright.async_api import async_playwright
+
+# CHANGE THIS
+PROFILE_DIR = "/home/kali/.config/chromium"
+
+CHROMIUM_PATH = "/usr/bin/chromium"
 
 URL_FILE = "urls.txt"
 OUTPUT_DIR = "screenshots"
 
-GECKODRIVER = "/usr/local/bin/geckodriver"
-
 
 def sanitize(text):
-    return re.sub(r'[<>:"/\\|?*]', '_', text)
+    return re.sub(r'[<>:"/\\|?*]', "_", text)
 
 
 def add_banner(image_file, original_url, final_url):
 
     img = Image.open(image_file)
 
-    banner_height = 90
+    banner_height = 100
 
-    new_img = Image.new(
+    canvas = Image.new(
         "RGB",
         (img.width, img.height + banner_height),
         "white"
     )
 
-    draw = ImageDraw.Draw(new_img)
+    draw = ImageDraw.Draw(canvas)
 
     draw.rectangle(
         [(0, 0), (img.width, banner_height)],
@@ -57,25 +57,27 @@ def add_banner(image_file, original_url, final_url):
     )
 
     draw.text(
-        (10, 45),
+        (10, 50),
         f"Final: {final_url}",
         fill="white",
         font=font
     )
 
-    new_img.paste(img, (0, banner_height))
+    canvas.paste(
+        img,
+        (0, banner_height)
+    )
 
-    new_img.save(image_file)
+    canvas.save(image_file)
 
 
-def capture(url):
+async def capture(context, url):
 
     parsed = urlparse(url)
 
     host = parsed.hostname or "unknown"
 
     port = parsed.port
-
     if not port:
         port = 443 if parsed.scheme == "https" else 80
 
@@ -84,53 +86,59 @@ def capture(url):
         str(port)
     )
 
-    os.makedirs(folder, exist_ok=True)
+    os.makedirs(
+        folder,
+        exist_ok=True
+    )
+
+    filename = sanitize(
+        f"{parsed.scheme}_{host}_{port}.png"
+    )
 
     outfile = os.path.join(
         folder,
-        sanitize(
-            f"{parsed.scheme}_{host}_{port}.png"
-        )
+        filename
     )
 
-    opts = Options()
+    page = await context.new_page()
 
-    opts.accept_insecure_certs = True
-
-    service = Service(
-        executable_path=GECKODRIVER
-    )
-
-    driver = None
+    final_url = url
 
     try:
 
-        driver = webdriver.Firefox(
-            service=service,
-            options=opts
-        )
-
-        driver.set_window_size(
-            1920,
-            1080
-        )
+        print(f"[START] {url}")
 
         try:
-            driver.get(url)
-        except Exception:
-            pass
 
-        time.sleep(8)
+            await page.goto(
+                url,
+                timeout=30000,
+                wait_until="networkidle"
+            )
 
-        final_url = driver.current_url
+            await page.wait_for_timeout(
+                5000
+            )
 
-        print("=" * 80)
-        print("Original :", url)
-        print("Final    :", final_url)
-        print("Title    :", driver.title)
-        print("=" * 80)
+            final_url = page.url
 
-        driver.save_screenshot(outfile)
+        except Exception as e:
+
+            print(
+                f"[INFO] Navigation Error: {url}"
+            )
+
+            print(e)
+
+            try:
+                final_url = page.url
+            except:
+                pass
+
+        await page.screenshot(
+            path=outfile,
+            full_page=True
+        )
 
         add_banner(
             outfile,
@@ -138,26 +146,41 @@ def capture(url):
             final_url
         )
 
-        print(f"[SAVED] {outfile}")
+        print(
+            f"[SAVED] {outfile}"
+        )
+
+        print(
+            f"[FINAL] {final_url}"
+        )
 
     except Exception as e:
 
-        print(f"[FAILED] {url}")
+        print(
+            f"[FAILED] {url}"
+        )
+
         print(e)
 
     finally:
 
-        if driver:
-            driver.quit()
+        await page.close()
 
 
-def main():
+async def main():
 
-    if not os.path.exists(URL_FILE):
-        print("urls.txt not found")
+    if not os.path.exists(
+        URL_FILE
+    ):
+        print(
+            f"{URL_FILE} not found"
+        )
         return
 
-    with open(URL_FILE) as f:
+    with open(
+        URL_FILE,
+        "r"
+    ) as f:
 
         urls = [
             x.strip()
@@ -165,10 +188,39 @@ def main():
             if x.strip()
         ]
 
-    for url in urls:
+    print(
+        f"Loaded {len(urls)} URLs"
+    )
 
-        capture(url)
+    os.makedirs(
+        OUTPUT_DIR,
+        exist_ok=True
+    )
+
+    async with async_playwright() as p:
+
+        context = await p.chromium.launch_persistent_context(
+            user_data_dir=PROFILE_DIR,
+            executable_path=CHROMIUM_PATH,
+            headless=False,
+            ignore_https_errors=True,
+            args=[
+                "--ignore-certificate-errors",
+                "--disable-blink-features=AutomationControlled",
+                "--start-maximized"
+            ]
+        )
+
+        for url in urls:
+
+            await capture(
+                context,
+                url
+            )
+
+        await context.close()
 
 
 if __name__ == "__main__":
-    main()
+
+    asyncio.run(main())
