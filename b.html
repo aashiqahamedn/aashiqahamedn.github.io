@@ -1,26 +1,205 @@
-from selenium import webdriver
-from selenium.webdriver.firefox.options import Options
-import time
+import asyncio
+import os
+import re
+from urllib.parse import urlparse
 
-opts = Options()
-opts.accept_insecure_certs = True
+from playwright.async_api import async_playwright
 
-driver = webdriver.Firefox(options=opts)
+URL_FILE = "urls.txt"
+OUTPUT_DIR = "screenshots"
+CHROMIUM_PATH = "/usr/bin/chromium"
 
-driver.set_window_size(1920, 1080)
+CONCURRENT = 5
 
-url = "http://10.13.139.1:80"
 
-try:
-    driver.get(url)
-except Exception as e:
-    print("Navigation exception:", e)
+def sanitize(text):
+    return re.sub(r'[<>:"/\\|?*]', "_", text)
 
-time.sleep(5)
 
-print("Current URL:", driver.current_url)
-print("Title:", driver.title)
+async def capture(url, browser, semaphore):
 
-driver.save_screenshot("test.png")
+    async with semaphore:
 
-driver.quit()
+        parsed = urlparse(url)
+
+        host = parsed.hostname or "unknown"
+
+        port = parsed.port
+        if not port:
+            port = 443 if parsed.scheme == "https" else 80
+
+        folder = os.path.join(
+            OUTPUT_DIR,
+            str(port)
+        )
+
+        os.makedirs(folder, exist_ok=True)
+
+        outfile = os.path.join(
+            folder,
+            sanitize(
+                f"{parsed.scheme}_{host}_{port}.png"
+            )
+        )
+
+        context = await browser.new_context(
+            ignore_https_errors=True,
+            viewport={
+                "width": 1920,
+                "height": 1080
+            }
+        )
+
+        page = await context.new_page()
+
+        try:
+
+            try:
+                await page.goto(
+                    url,
+                    timeout=20000,
+                    wait_until="domcontentloaded"
+                )
+
+                await page.wait_for_timeout(3000)
+
+            except Exception as e:
+
+                await page.set_content(f"""
+                <html>
+                <body style="
+                    font-family: Arial;
+                    padding: 40px;
+                    background:#f4f4f4;">
+                    
+                    <h1 style="color:red">
+                        URL Load Failed
+                    </h1>
+
+                    <h2>
+                        {url}
+                    </h2>
+
+                    <pre style="
+                        background:white;
+                        padding:20px;
+                        border:1px solid #ccc;">
+{str(e)}
+                    </pre>
+
+                </body>
+                </html>
+                """)
+
+            try:
+                await page.evaluate(
+                    """
+                    (url) => {
+                        const div =
+                            document.createElement('div');
+
+                        div.innerText =
+                            'URL: ' + url;
+
+                        div.style.position =
+                            'fixed';
+
+                        div.style.top = '0';
+                        div.style.left = '0';
+
+                        div.style.width = '100%';
+
+                        div.style.background =
+                            '#cc0000';
+
+                        div.style.color =
+                            'white';
+
+                        div.style.fontSize =
+                            '20px';
+
+                        div.style.fontWeight =
+                            'bold';
+
+                        div.style.padding =
+                            '10px';
+
+                        div.style.zIndex =
+                            '99999999';
+
+                        document.body.prepend(div);
+                    }
+                    """,
+                    url
+                )
+            except:
+                pass
+
+            await page.screenshot(
+                path=outfile,
+                full_page=True
+            )
+
+            print(f"[+] Saved: {outfile}")
+
+        except Exception as e:
+
+            print(f"[-] {url}")
+            print(e)
+
+        finally:
+
+            await context.close()
+
+
+async def main():
+
+    if not os.path.exists(URL_FILE):
+        print("urls.txt not found")
+        return
+
+    with open(URL_FILE) as f:
+
+        urls = [
+            x.strip()
+            for x in f
+            if x.strip()
+        ]
+
+    os.makedirs(
+        OUTPUT_DIR,
+        exist_ok=True
+    )
+
+    semaphore = asyncio.Semaphore(
+        CONCURRENT
+    )
+
+    async with async_playwright() as p:
+
+        browser = await p.chromium.launch(
+            executable_path=CHROMIUM_PATH,
+            headless=True,
+            args=[
+                "--ignore-certificate-errors",
+                "--no-sandbox",
+                "--disable-dev-shm-usage"
+            ]
+        )
+
+        await asyncio.gather(
+            *[
+                capture(
+                    url,
+                    browser,
+                    semaphore
+                )
+                for url in urls
+            ]
+        )
+
+        await browser.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
