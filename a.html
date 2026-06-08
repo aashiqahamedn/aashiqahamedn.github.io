@@ -1,0 +1,112 @@
+import os
+import re
+import time
+import pyautogui
+
+from urllib.parse import urlparse
+
+from selenium import webdriver
+from selenium.webdriver.firefox.options import Options
+
+URL_FILE = "urls.txt"
+OUTPUT_DIR = "screenshots"
+
+
+def sanitize(name):
+    return re.sub(r'[<>:"/\\|?*]', '_', name)
+
+
+def take_screenshot(url):
+
+    parsed = urlparse(url)
+
+    host = parsed.hostname or "unknown"
+
+    port = parsed.port
+    if not port:
+        port = 443 if parsed.scheme == "https" else 80
+
+    folder = os.path.join(
+        OUTPUT_DIR,
+        str(port)
+    )
+
+    os.makedirs(folder, exist_ok=True)
+
+    outfile = os.path.join(
+        folder,
+        sanitize(
+            f"{parsed.scheme}_{host}_{port}.png"
+        )
+    )
+
+    options = Options()
+    options.accept_insecure_certs = True
+
+    driver = None
+
+    try:
+
+        driver = webdriver.Firefox(
+            options=options
+        )
+
+        driver.set_window_position(0, 0)
+
+        driver.set_window_size(
+            1920,
+            1080
+        )
+
+        try:
+            driver.get(url)
+        except Exception:
+            pass
+
+        time.sleep(5)
+
+        screenshot = pyautogui.screenshot()
+
+        screenshot.save(outfile)
+
+        print(f"[+] Saved: {outfile}")
+
+    except Exception as e:
+
+        print(f"[-] {url}")
+        print(e)
+
+    finally:
+
+        if driver:
+            driver.quit()
+
+
+def main():
+
+    if not os.path.exists(URL_FILE):
+        print("urls.txt not found")
+        return
+
+    with open(URL_FILE, "r") as f:
+
+        urls = [
+            line.strip()
+            for line in f
+            if line.strip()
+        ]
+
+    os.makedirs(
+        OUTPUT_DIR,
+        exist_ok=True
+    )
+
+    for url in urls:
+
+        take_screenshot(url)
+
+        time.sleep(2)
+
+
+if __name__ == "__main__":
+    main()
