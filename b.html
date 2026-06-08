@@ -1,6 +1,7 @@
-import asyncio
 import os
 import re
+import time
+import asyncio
 from urllib.parse import urlparse
 
 from playwright.async_api import async_playwright
@@ -9,147 +10,110 @@ URL_FILE = "urls.txt"
 OUTPUT_DIR = "screenshots"
 CHROMIUM_PATH = "/usr/bin/chromium"
 
-CONCURRENT = 5
-
 
 def sanitize(text):
-    return re.sub(r'[<>:"/\\|?*]', "_", text)
+    return re.sub(r'[<>:"/\\|?*]', '_', text)
 
 
-async def capture(url, browser, semaphore):
+async def capture(browser, url):
 
-    async with semaphore:
+    parsed = urlparse(url)
 
-        parsed = urlparse(url)
+    host = parsed.hostname or "unknown"
 
-        host = parsed.hostname or "unknown"
+    port = parsed.port
+    if not port:
+        port = 443 if parsed.scheme == "https" else 80
 
-        port = parsed.port
-        if not port:
-            port = 443 if parsed.scheme == "https" else 80
+    folder = os.path.join(
+        OUTPUT_DIR,
+        str(port)
+    )
 
-        folder = os.path.join(
-            OUTPUT_DIR,
-            str(port)
-        )
+    os.makedirs(folder, exist_ok=True)
 
-        os.makedirs(folder, exist_ok=True)
+    filename = sanitize(
+        f"{parsed.scheme}_{host}_{port}.png"
+    )
 
-        outfile = os.path.join(
-            folder,
-            sanitize(
-                f"{parsed.scheme}_{host}_{port}.png"
-            )
-        )
+    outfile = os.path.join(
+        folder,
+        filename
+    )
 
-        context = await browser.new_context(
-            ignore_https_errors=True,
-            viewport={
-                "width": 1920,
-                "height": 1080
-            }
-        )
+    print(f"[START] {url}")
 
-        page = await context.new_page()
+    context = await browser.new_context(
+        ignore_https_errors=True,
+        viewport={
+            "width": 1920,
+            "height": 1080
+        }
+    )
+
+    page = await context.new_page()
+
+    try:
 
         try:
-
-            try:
-                await page.goto(
-                    url,
-                    timeout=20000,
-                    wait_until="domcontentloaded"
-                )
-
-                await page.wait_for_timeout(3000)
-
-            except Exception as e:
-
-                await page.set_content(f"""
-                <html>
-                <body style="
-                    font-family: Arial;
-                    padding: 40px;
-                    background:#f4f4f4;">
-                    
-                    <h1 style="color:red">
-                        URL Load Failed
-                    </h1>
-
-                    <h2>
-                        {url}
-                    </h2>
-
-                    <pre style="
-                        background:white;
-                        padding:20px;
-                        border:1px solid #ccc;">
-{str(e)}
-                    </pre>
-
-                </body>
-                </html>
-                """)
-
-            try:
-                await page.evaluate(
-                    """
-                    (url) => {
-                        const div =
-                            document.createElement('div');
-
-                        div.innerText =
-                            'URL: ' + url;
-
-                        div.style.position =
-                            'fixed';
-
-                        div.style.top = '0';
-                        div.style.left = '0';
-
-                        div.style.width = '100%';
-
-                        div.style.background =
-                            '#cc0000';
-
-                        div.style.color =
-                            'white';
-
-                        div.style.fontSize =
-                            '20px';
-
-                        div.style.fontWeight =
-                            'bold';
-
-                        div.style.padding =
-                            '10px';
-
-                        div.style.zIndex =
-                            '99999999';
-
-                        document.body.prepend(div);
-                    }
-                    """,
-                    url
-                )
-            except:
-                pass
-
-            await page.screenshot(
-                path=outfile,
-                full_page=True
+            await page.goto(
+                url,
+                timeout=15000,
+                wait_until="load"
             )
-
-            print(f"[+] Saved: {outfile}")
-
         except Exception as e:
+            print(f"[INFO] Navigation Error: {url}")
+            print(f"       {e}")
 
-            print(f"[-] {url}")
-            print(e)
+        # Let Chromium render either page or error page
+        await page.wait_for_timeout(5000)
 
-        finally:
+        # Add URL banner
+        try:
+            await page.evaluate(
+                """
+                (url) => {
+                    let div = document.createElement('div');
 
-            await context.close()
+                    div.innerText = 'URL: ' + url;
+
+                    div.style.position = 'fixed';
+                    div.style.top = '0';
+                    div.style.left = '0';
+                    div.style.width = '100%';
+
+                    div.style.background = 'red';
+                    div.style.color = 'white';
+
+                    div.style.padding = '10px';
+                    div.style.fontSize = '20px';
+                    div.style.fontWeight = 'bold';
+
+                    div.style.zIndex = '999999';
+
+                    document.body.prepend(div);
+                }
+                """,
+                url
+            )
+        except:
+            pass
+
+        await page.screenshot(
+            path=outfile,
+            full_page=True
+        )
+
+        print(f"[SAVED] {outfile}")
+
+    except Exception as e:
+
+        print(f"[FAILED] {url}")
+        print(e)
+
+    finally:
+
+        await context.close()
 
 
 async def main():
@@ -158,21 +122,18 @@ async def main():
         print("urls.txt not found")
         return
 
-    with open(URL_FILE) as f:
-
+    with open(URL_FILE, "r") as f:
         urls = [
             x.strip()
             for x in f
             if x.strip()
         ]
 
+    print(f"Loaded {len(urls)} URLs")
+
     os.makedirs(
         OUTPUT_DIR,
         exist_ok=True
-    )
-
-    semaphore = asyncio.Semaphore(
-        CONCURRENT
     )
 
     async with async_playwright() as p:
@@ -187,16 +148,8 @@ async def main():
             ]
         )
 
-        await asyncio.gather(
-            *[
-                capture(
-                    url,
-                    browser,
-                    semaphore
-                )
-                for url in urls
-            ]
-        )
+        for url in urls:
+            await capture(browser, url)
 
         await browser.close()
 
