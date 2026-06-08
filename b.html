@@ -20,11 +20,11 @@ def sanitize(text):
     return re.sub(r'[<>:"/\\|?*]', '_', text)
 
 
-def add_banner(image_file, text):
+def add_banner(image_file, original_url, final_url):
 
     img = Image.open(image_file)
 
-    banner_height = 60
+    banner_height = 90
 
     new_img = Image.new(
         "RGB",
@@ -36,20 +36,27 @@ def add_banner(image_file, text):
 
     draw.rectangle(
         [(0, 0), (img.width, banner_height)],
-        fill=(200, 0, 0)
+        fill=(180, 0, 0)
     )
 
     try:
         font = ImageFont.truetype(
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            24
+            20
         )
     except:
         font = ImageFont.load_default()
 
     draw.text(
-        (10, 15),
-        text,
+        (10, 10),
+        f"Original: {original_url}",
+        fill="white",
+        font=font
+    )
+
+    draw.text(
+        (10, 45),
+        f"Final: {final_url}",
         fill="white",
         font=font
     )
@@ -69,7 +76,6 @@ async def capture(browser, url):
     host = parsed.hostname or "unknown"
 
     port = parsed.port
-
     if not port:
         port = 443 if parsed.scheme == "https" else 80
 
@@ -104,22 +110,28 @@ async def capture(browser, url):
 
     page = await context.new_page()
 
+    final_url = url
+
     try:
 
         try:
 
             await page.goto(
                 url,
-                timeout=15000,
-                wait_until="load"
+                timeout=30000,
+                wait_until="networkidle"
             )
+
+            await page.wait_for_timeout(5000)
+
+            final_url = page.url
 
         except Exception as e:
 
             print(f"[INFO] {url}")
-            print(f"       {e}")
+            print(e)
 
-        await page.wait_for_timeout(5000)
+            final_url = page.url or url
 
         await page.screenshot(
             path=outfile,
@@ -128,10 +140,14 @@ async def capture(browser, url):
 
         add_banner(
             outfile,
-            url
+            url,
+            final_url
         )
 
-        print(f"[SAVED] {outfile}")
+        print(
+            f"[SAVED] {outfile} "
+            f"-> {final_url}"
+        )
 
     except Exception as e:
 
