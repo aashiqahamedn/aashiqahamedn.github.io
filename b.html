@@ -1,128 +1,64 @@
 import os
+import time
 import subprocess
 from urllib.parse import urlparse
-from PIL import Image, ImageDraw, ImageFont
 
 URL_FILE = "urls.txt"
 OUTPUT_DIR = "screenshots"
 
-def sanitize(name):
-    return "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-def add_banner(image_file, text):
-    img = Image.open(image_file)
+with open(URL_FILE) as f:
+    urls = [u.strip() for u in f if u.strip()]
 
-    banner_height = 80
-
-    out = Image.new(
-        "RGB",
-        (img.width, img.height + banner_height),
-        (255, 255, 255)
-    )
-
-    draw = ImageDraw.Draw(out)
-
-    draw.rectangle(
-        [(0, 0), (img.width, banner_height)],
-        fill=(180, 0, 0)
-    )
-
-    try:
-        font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            22
-        )
-    except:
-        font = ImageFont.load_default()
-
-    draw.text(
-        (10, 20),
-        text,
-        fill="white",
-        font=font
-    )
-
-    out.paste(img, (0, banner_height))
-    out.save(image_file)
-
-def take_screenshot(url):
+for url in urls:
 
     parsed = urlparse(url)
 
     port = parsed.port
-
     if not port:
         port = 443 if parsed.scheme == "https" else 80
 
-    folder = os.path.join(
-        OUTPUT_DIR,
-        str(port)
+    folder = os.path.join(OUTPUT_DIR, str(port))
+    os.makedirs(folder, exist_ok=True)
+
+    filename = f"{parsed.scheme}_{parsed.hostname}_{port}.png"
+    outfile = os.path.join(folder, filename)
+
+    print(f"[+] Opening {url}")
+
+    subprocess.Popen(
+        ["chromium", url],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
     )
 
-    os.makedirs(
-        folder,
-        exist_ok=True
-    )
+    # Wait for page load / redirects
+    time.sleep(10)
 
-    filename = sanitize(
-        f"{parsed.scheme}_{parsed.hostname}_{port}.png"
-    )
-
-    outfile = os.path.join(
-        folder,
-        filename
-    )
-
-    print(f"[+] {url}")
-
-    cmd = [
-        "chromium",
-        "--headless=new",
-        "--disable-gpu",
-        "--ignore-certificate-errors",
-        "--hide-scrollbars",
-        "--window-size=1920,3000",
-        f"--screenshot={outfile}",
-        url
-    ]
-
+    # Bring Chromium to front
     subprocess.run(
-        cmd,
-        timeout=60,
-        stderr=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL
+        ["wmctrl", "-a", "Chromium"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
     )
 
-    if os.path.exists(outfile):
-        add_banner(
-            outfile,
-            url
-        )
-        print(f"    Saved: {outfile}")
-    else:
-        print(f"    Failed")
+    time.sleep(2)
 
-def main():
-
-    os.makedirs(
-        OUTPUT_DIR,
-        exist_ok=True
+    # Full screen screenshot
+    subprocess.run(
+        ["scrot", outfile]
     )
 
-    with open(URL_FILE) as f:
-        urls = [
-            x.strip()
-            for x in f
-            if x.strip()
-        ]
+    print(f"[+] Saved {outfile}")
 
-    for url in urls:
+    # Close current tab
+    subprocess.run(
+        ["xdotool", "key", "ctrl+w"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
 
-        try:
-            take_screenshot(url)
-        except Exception as e:
-            print(url)
-            print(e)
+    time.sleep(2)
 
-if __name__ == "__main__":
-    main()
+print("Done")
