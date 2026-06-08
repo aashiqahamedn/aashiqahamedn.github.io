@@ -9,13 +9,9 @@ from PIL import ImageFont
 
 from playwright.async_api import async_playwright
 
-# CHANGE THIS
-PROFILE_DIR = "/home/kali/.config/chromium"
-
-CHROMIUM_PATH = "/usr/bin/chromium"
-
 URL_FILE = "urls.txt"
 OUTPUT_DIR = "screenshots"
+CHROMIUM_PATH = "/usr/bin/chromium"
 
 
 def sanitize(text):
@@ -28,13 +24,13 @@ def add_banner(image_file, original_url, final_url):
 
     banner_height = 100
 
-    canvas = Image.new(
+    new_img = Image.new(
         "RGB",
         (img.width, img.height + banner_height),
-        "white"
+        color="white"
     )
 
-    draw = ImageDraw.Draw(canvas)
+    draw = ImageDraw.Draw(new_img)
 
     draw.rectangle(
         [(0, 0), (img.width, banner_height)],
@@ -63,15 +59,15 @@ def add_banner(image_file, original_url, final_url):
         font=font
     )
 
-    canvas.paste(
+    new_img.paste(
         img,
         (0, banner_height)
     )
 
-    canvas.save(image_file)
+    new_img.save(image_file)
 
 
-async def capture(context, url):
+async def capture(browser, url):
 
     parsed = urlparse(url)
 
@@ -86,10 +82,7 @@ async def capture(context, url):
         str(port)
     )
 
-    os.makedirs(
-        folder,
-        exist_ok=True
-    )
+    os.makedirs(folder, exist_ok=True)
 
     filename = sanitize(
         f"{parsed.scheme}_{host}_{port}.png"
@@ -98,6 +91,14 @@ async def capture(context, url):
     outfile = os.path.join(
         folder,
         filename
+    )
+
+    context = await browser.new_context(
+        ignore_https_errors=True,
+        viewport={
+            "width": 1920,
+            "height": 1080
+        }
     )
 
     page = await context.new_page()
@@ -116,24 +117,21 @@ async def capture(context, url):
                 wait_until="networkidle"
             )
 
-            await page.wait_for_timeout(
-                5000
-            )
+            await page.wait_for_timeout(5000)
 
             final_url = page.url
 
         except Exception as e:
 
-            print(
-                f"[INFO] Navigation Error: {url}"
-            )
-
-            print(e)
+            print(f"[INFO] {url}")
+            print(str(e))
 
             try:
                 final_url = page.url
             except:
-                pass
+                final_url = url
+
+        print(f"[FINAL] {final_url}")
 
         await page.screenshot(
             path=outfile,
@@ -146,41 +144,25 @@ async def capture(context, url):
             final_url
         )
 
-        print(
-            f"[SAVED] {outfile}"
-        )
-
-        print(
-            f"[FINAL] {final_url}"
-        )
+        print(f"[SAVED] {outfile}")
 
     except Exception as e:
 
-        print(
-            f"[FAILED] {url}"
-        )
-
+        print(f"[FAILED] {url}")
         print(e)
 
     finally:
 
-        await page.close()
+        await context.close()
 
 
 async def main():
 
-    if not os.path.exists(
-        URL_FILE
-    ):
-        print(
-            f"{URL_FILE} not found"
-        )
+    if not os.path.exists(URL_FILE):
+        print("urls.txt not found")
         return
 
-    with open(
-        URL_FILE,
-        "r"
-    ) as f:
+    with open(URL_FILE, "r") as f:
 
         urls = [
             x.strip()
@@ -188,9 +170,7 @@ async def main():
             if x.strip()
         ]
 
-    print(
-        f"Loaded {len(urls)} URLs"
-    )
+    print(f"Loaded {len(urls)} URLs")
 
     os.makedirs(
         OUTPUT_DIR,
@@ -199,28 +179,29 @@ async def main():
 
     async with async_playwright() as p:
 
-        context = await p.chromium.launch_persistent_context(
-            user_data_dir=PROFILE_DIR,
+        browser = await p.chromium.launch(
             executable_path=CHROMIUM_PATH,
             headless=False,
-            ignore_https_errors=True,
             args=[
                 "--ignore-certificate-errors",
                 "--disable-blink-features=AutomationControlled",
-                "--start-maximized"
+                "--no-sandbox",
+                "--disable-dev-shm-usage"
             ]
         )
 
         for url in urls:
 
-            await capture(
-                context,
-                url
-            )
+            try:
+                await capture(
+                    browser,
+                    url
+                )
+            except Exception as e:
+                print(e)
 
-        await context.close()
+        await browser.close()
 
 
 if __name__ == "__main__":
-
     asyncio.run(main())
