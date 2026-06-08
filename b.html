@@ -1,6 +1,6 @@
-import asyncio
 import os
 import re
+import time
 
 from urllib.parse import urlparse
 
@@ -8,12 +8,14 @@ from PIL import Image
 from PIL import ImageDraw
 from PIL import ImageFont
 
-from playwright.async_api import async_playwright
-
+from selenium import webdriver
+from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.firefox.service import Service
 
 URL_FILE = "urls.txt"
 OUTPUT_DIR = "screenshots"
-CHROMIUM_PATH = "/usr/bin/chromium"
+
+GECKODRIVER = "/usr/local/bin/geckodriver"
 
 
 def sanitize(text):
@@ -29,7 +31,7 @@ def add_banner(image_file, original_url, final_url):
     new_img = Image.new(
         "RGB",
         (img.width, img.height + banner_height),
-        color="white"
+        "white"
     )
 
     draw = ImageDraw.Draw(new_img)
@@ -61,21 +63,19 @@ def add_banner(image_file, original_url, final_url):
         font=font
     )
 
-    new_img.paste(
-        img,
-        (0, banner_height)
-    )
+    new_img.paste(img, (0, banner_height))
 
     new_img.save(image_file)
 
 
-async def capture(browser, url):
+def capture(url):
 
     parsed = urlparse(url)
 
     host = parsed.hostname or "unknown"
 
     port = parsed.port
+
     if not port:
         port = 443 if parsed.scheme == "https" else 80
 
@@ -84,59 +84,53 @@ async def capture(browser, url):
         str(port)
     )
 
-    os.makedirs(
-        folder,
-        exist_ok=True
-    )
-
-    filename = sanitize(
-        f"{parsed.scheme}_{host}_{port}.png"
-    )
+    os.makedirs(folder, exist_ok=True)
 
     outfile = os.path.join(
         folder,
-        filename
+        sanitize(
+            f"{parsed.scheme}_{host}_{port}.png"
+        )
     )
 
-    print(f"[START] {url}")
+    opts = Options()
 
-    context = await browser.new_context(
-        ignore_https_errors=True,
-        viewport={
-            "width": 1920,
-            "height": 1080
-        }
+    opts.accept_insecure_certs = True
+
+    service = Service(
+        executable_path=GECKODRIVER
     )
 
-    page = await context.new_page()
-
-    final_url = url
+    driver = None
 
     try:
 
-        try:
-
-            await page.goto(
-                url,
-                timeout=30000,
-                wait_until="networkidle"
-            )
-
-            await page.wait_for_timeout(5000)
-
-            final_url = page.url
-
-        except Exception as e:
-
-            print(f"[INFO] {url}")
-            print(e)
-
-            final_url = page.url or url
-
-        await page.screenshot(
-            path=outfile,
-            full_page=True
+        driver = webdriver.Firefox(
+            service=service,
+            options=opts
         )
+
+        driver.set_window_size(
+            1920,
+            1080
+        )
+
+        try:
+            driver.get(url)
+        except Exception:
+            pass
+
+        time.sleep(8)
+
+        final_url = driver.current_url
+
+        print("=" * 80)
+        print("Original :", url)
+        print("Final    :", final_url)
+        print("Title    :", driver.title)
+        print("=" * 80)
+
+        driver.save_screenshot(outfile)
 
         add_banner(
             outfile,
@@ -144,10 +138,7 @@ async def capture(browser, url):
             final_url
         )
 
-        print(
-            f"[SAVED] {outfile} "
-            f"-> {final_url}"
-        )
+        print(f"[SAVED] {outfile}")
 
     except Exception as e:
 
@@ -156,16 +147,17 @@ async def capture(browser, url):
 
     finally:
 
-        await context.close()
+        if driver:
+            driver.quit()
 
 
-async def main():
+def main():
 
     if not os.path.exists(URL_FILE):
         print("urls.txt not found")
         return
 
-    with open(URL_FILE, "r") as f:
+    with open(URL_FILE) as f:
 
         urls = [
             x.strip()
@@ -173,37 +165,10 @@ async def main():
             if x.strip()
         ]
 
-    print(f"Loaded {len(urls)} URLs")
+    for url in urls:
 
-    os.makedirs(
-        OUTPUT_DIR,
-        exist_ok=True
-    )
-
-    async with async_playwright() as p:
-
-        browser = await p.chromium.launch(
-            executable_path=CHROMIUM_PATH,
-            headless=True,
-            args=[
-                "--ignore-certificate-errors",
-                "--no-sandbox",
-                "--disable-dev-shm-usage"
-            ]
-        )
-
-        for url in urls:
-
-            try:
-                await capture(
-                    browser,
-                    url
-                )
-            except Exception as e:
-                print(e)
-
-        await browser.close()
+        capture(url)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
