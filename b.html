@@ -1,0 +1,150 @@
+import os
+import re
+import time
+from urllib.parse import urlparse
+from concurrent.futures import ThreadPoolExecutor
+
+from selenium import webdriver
+from selenium.webdriver.firefox.options import Options
+
+URL_FILE = "urls.txt"
+OUTPUT_DIR = "screenshots"
+MAX_THREADS = 5
+
+
+def sanitize(name):
+    return re.sub(r'[<>:"/\\|?*]', '_', name)
+
+
+def take_screenshot(url):
+
+    parsed = urlparse(url)
+
+    host = parsed.hostname or "unknown"
+
+    port = parsed.port
+    if not port:
+        port = 443 if parsed.scheme == "https" else 80
+
+    folder = os.path.join(
+        OUTPUT_DIR,
+        str(port)
+    )
+
+    os.makedirs(folder, exist_ok=True)
+
+    filename = sanitize(
+        f"{parsed.scheme}_{host}_{port}.png"
+    )
+
+    outfile = os.path.join(
+        folder,
+        filename
+    )
+
+    options = Options()
+    options.accept_insecure_certs = True
+    options.add_argument("--headless")
+
+    driver = None
+
+    try:
+
+        driver = webdriver.Firefox(options=options)
+
+        driver.set_window_size(
+            1920,
+            1080
+        )
+
+        driver.set_page_load_timeout(20)
+
+        try:
+            driver.get(url)
+        except Exception:
+            # Firefox will still display its own error page
+            pass
+
+        time.sleep(3)
+
+        try:
+            driver.execute_script("""
+                var banner = document.getElementById('audit-banner');
+
+                if (!banner) {
+                    banner = document.createElement('div');
+                    banner.id = 'audit-banner';
+
+                    banner.style.position = 'fixed';
+                    banner.style.top = '0';
+                    banner.style.left = '0';
+                    banner.style.width = '100%';
+
+                    banner.style.background = '#cc0000';
+                    banner.style.color = 'white';
+
+                    banner.style.fontSize = '22px';
+                    banner.style.fontWeight = 'bold';
+
+                    banner.style.padding = '12px';
+
+                    banner.style.zIndex = '999999999';
+
+                    banner.innerHTML = 'URL : ' + arguments[0];
+
+                    document.body.prepend(banner);
+
+                    document.body.style.paddingTop = '60px';
+                }
+            """, url)
+
+            time.sleep(1)
+
+        except Exception:
+            pass
+
+        driver.save_screenshot(outfile)
+
+        print(f"[+] Saved: {outfile}")
+
+    except Exception as e:
+
+        print(f"[-] {url}")
+        print(f"    {e}")
+
+    finally:
+
+        if driver:
+            driver.quit()
+
+
+def main():
+
+    if not os.path.exists(URL_FILE):
+        print("urls.txt not found")
+        return
+
+    with open(URL_FILE, "r") as f:
+        urls = [
+            x.strip()
+            for x in f
+            if x.strip()
+        ]
+
+    os.makedirs(
+        OUTPUT_DIR,
+        exist_ok=True
+    )
+
+    with ThreadPoolExecutor(
+        max_workers=MAX_THREADS
+    ) as executor:
+
+        executor.map(
+            take_screenshot,
+            urls
+        )
+
+
+if __name__ == "__main__":
+    main()
