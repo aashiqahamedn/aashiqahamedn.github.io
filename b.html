@@ -1,10 +1,15 @@
+import asyncio
 import os
 import re
-import time
-import asyncio
+
 from urllib.parse import urlparse
 
+from PIL import Image
+from PIL import ImageDraw
+from PIL import ImageFont
+
 from playwright.async_api import async_playwright
+
 
 URL_FILE = "urls.txt"
 OUTPUT_DIR = "screenshots"
@@ -15,6 +20,48 @@ def sanitize(text):
     return re.sub(r'[<>:"/\\|?*]', '_', text)
 
 
+def add_banner(image_file, text):
+
+    img = Image.open(image_file)
+
+    banner_height = 60
+
+    new_img = Image.new(
+        "RGB",
+        (img.width, img.height + banner_height),
+        color="white"
+    )
+
+    draw = ImageDraw.Draw(new_img)
+
+    draw.rectangle(
+        [(0, 0), (img.width, banner_height)],
+        fill=(200, 0, 0)
+    )
+
+    try:
+        font = ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            24
+        )
+    except:
+        font = ImageFont.load_default()
+
+    draw.text(
+        (10, 15),
+        text,
+        fill="white",
+        font=font
+    )
+
+    new_img.paste(
+        img,
+        (0, banner_height)
+    )
+
+    new_img.save(image_file)
+
+
 async def capture(browser, url):
 
     parsed = urlparse(url)
@@ -22,6 +69,7 @@ async def capture(browser, url):
     host = parsed.hostname or "unknown"
 
     port = parsed.port
+
     if not port:
         port = 443 if parsed.scheme == "https" else 80
 
@@ -30,7 +78,10 @@ async def capture(browser, url):
         str(port)
     )
 
-    os.makedirs(folder, exist_ok=True)
+    os.makedirs(
+        folder,
+        exist_ok=True
+    )
 
     filename = sanitize(
         f"{parsed.scheme}_{host}_{port}.png"
@@ -56,52 +107,28 @@ async def capture(browser, url):
     try:
 
         try:
+
             await page.goto(
                 url,
                 timeout=15000,
                 wait_until="load"
             )
+
         except Exception as e:
-            print(f"[INFO] Navigation Error: {url}")
+
+            print(f"[INFO] {url}")
             print(f"       {e}")
 
-        # Let Chromium render either page or error page
         await page.wait_for_timeout(5000)
-
-        # Add URL banner
-        try:
-            await page.evaluate(
-                """
-                (url) => {
-                    let div = document.createElement('div');
-
-                    div.innerText = 'URL: ' + url;
-
-                    div.style.position = 'fixed';
-                    div.style.top = '0';
-                    div.style.left = '0';
-                    div.style.width = '100%';
-
-                    div.style.background = 'red';
-                    div.style.color = 'white';
-
-                    div.style.padding = '10px';
-                    div.style.fontSize = '20px';
-                    div.style.fontWeight = 'bold';
-
-                    div.style.zIndex = '999999';
-
-                    document.body.prepend(div);
-                }
-                """,
-                url
-            )
-        except:
-            pass
 
         await page.screenshot(
             path=outfile,
             full_page=True
+        )
+
+        add_banner(
+            outfile,
+            url
         )
 
         print(f"[SAVED] {outfile}")
@@ -123,6 +150,7 @@ async def main():
         return
 
     with open(URL_FILE, "r") as f:
+
         urls = [
             x.strip()
             for x in f
@@ -149,7 +177,14 @@ async def main():
         )
 
         for url in urls:
-            await capture(browser, url)
+
+            try:
+                await capture(
+                    browser,
+                    url
+                )
+            except Exception as e:
+                print(e)
 
         await browser.close()
 
